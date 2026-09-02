@@ -47,7 +47,7 @@ export class AuthService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { phone: dto.phone } });
-    const otp = generateOtp();
+    const otp = this.resolveOtp(dto.phone);
     const ttl = Number(this.config.get('OTP_TTL_SECONDS') || 300);
     const resendSeconds = Number(this.config.get('OTP_RESEND_SECONDS') || 30);
     const now = new Date();
@@ -227,6 +227,23 @@ export class AuthService {
 
   private pepper(): string {
     return this.config.get<string>('OTP_PEPPER') || 'otp-pepper';
+  }
+
+  /**
+   * Test numbers always receive OTP_TEST_CODE so QA and app-store reviewers can
+   * sign in without SMS delivery. Every other number gets a random code.
+   */
+  private resolveOtp(phone: string): string {
+    const testCode = (this.config.get<string>('OTP_TEST_CODE') || '').trim();
+    const testPhones = (this.config.get<string>('OTP_TEST_PHONES') || '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+    if (testCode && testPhones.includes(phone)) {
+      return testCode;
+    }
+    return generateOtp();
   }
 
   private signAccess(userId: number, role: string, expiresIn: number) {
