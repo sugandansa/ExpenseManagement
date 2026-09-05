@@ -6,9 +6,20 @@ async function main() {
   await prisma.user.upsert({
     where: { phone: '9876543210' },
     update: { name: 'Rajesh' },
-    create: { id: 101, name: 'Rajesh', phone: '9876543210', role: 'employee', department: 'Housekeeping', monthlyBudget: new Prisma.Decimal(5000) },
+    create: {
+      id: 101,
+      name: 'Rajesh',
+      phone: '9876543210',
+      role: 'employee',
+      department: 'Housekeeping',
+      monthlyBudget: new Prisma.Decimal(5000),
+    },
   });
-  await prisma.wallet.upsert({ where: { userId: 101 }, update: { balance: new Prisma.Decimal(2500) }, create: { userId: 101, balance: new Prisma.Decimal(2500) } });
+  await prisma.wallet.upsert({
+    where: { userId: 101 },
+    update: { balance: new Prisma.Decimal(2500) },
+    create: { userId: 101, balance: new Prisma.Decimal(2500) },
+  });
 
   const categories = [
     { id: 1, name: 'Travel', iconCategory: 'travel', monthlyCap: 40000 },
@@ -23,11 +34,19 @@ async function main() {
     });
   }
   const subCategories = [
-    [1, 1, 'Taxi'], [2, 1, 'Fuel'], [3, 1, 'Lodging'],
-    [4, 2, 'Meals'], [5, 2, 'Snacks'], [6, 3, 'Stationery'],
+    [1, 1, 'Taxi', 15000],
+    [2, 1, 'Fuel', 15000],
+    [3, 1, 'Lodging', 10000],
+    [4, 2, 'Meals', 20000],
+    [5, 2, 'Snacks', 10000],
+    [6, 3, 'Stationery', 30000],
   ] as const;
-  for (const [id, categoryId, name] of subCategories) {
-    await prisma.subCategory.upsert({ where: { id }, update: { name }, create: { id, categoryId, name } });
+  for (const [id, categoryId, name, monthlyCap] of subCategories) {
+    await prisma.subCategory.upsert({
+      where: { id },
+      update: { name, monthlyCap: new Prisma.Decimal(monthlyCap) },
+      create: { id, categoryId, name, monthlyCap: new Prisma.Decimal(monthlyCap) },
+    });
   }
   const settings = {
     force_update_android: '1',
@@ -39,7 +58,11 @@ async function main() {
     app_version: '2.0.0',
   };
   for (const [settingKey, settingValue] of Object.entries(settings)) {
-    await prisma.appSetting.upsert({ where: { settingKey }, update: { settingValue }, create: { settingKey, settingValue } });
+    await prisma.appSetting.upsert({
+      where: { settingKey },
+      update: { settingValue },
+      create: { settingKey, settingValue },
+    });
   }
   await prisma.roleCap.upsert({
     where: { role: 'Housekeeping' },

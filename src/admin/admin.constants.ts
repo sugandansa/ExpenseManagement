@@ -1,2 +1,2 @@
-export const OPEN_CLAIM_STATUSES = ['submitted', 'tagged', 'pending', 'flagged'];
+export { OPEN_CLAIM_STATUSES } from '../common/utils/claim-status';
 export const ADMIN_ROLES = ['owner', 'admin'];

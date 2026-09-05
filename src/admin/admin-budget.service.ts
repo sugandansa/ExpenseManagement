@@ -5,7 +5,7 @@ import { toNumber } from '../common/utils/crypto';
 import { monthRange } from '../common/utils/query';
 import { OPEN_CLAIM_STATUSES } from './admin.constants';
 
-type EvaluatedClaim = ExpenseClaim & { user: User; category: Category };
+type EvaluatedClaim = ExpenseClaim & { user: User; category: Category | null };
 
 @Injectable()
 export class AdminBudgetService {
@@ -13,13 +13,13 @@ export class AdminBudgetService {
 
   async reevaluateOpenClaims() {
     const claims = await this.prisma.expenseClaim.findMany({
-      where: { approvalStatus: 'pending', status: { in: OPEN_CLAIM_STATUSES } },
+      where: { approvalStatus: 'pending', status: { in: [...OPEN_CLAIM_STATUSES] } },
       include: { user: true, category: true },
     });
     let updated = 0;
     for (const claim of claims) {
       const result = await this.evaluateClaim(claim);
-      const nextStatus = result.flagged ? 'flagged' : claim.status === 'flagged' ? 'tagged' : claim.status;
+      const nextStatus = result.flagged ? 'flagged' : claim.status === 'flagged' ? 'pending' : claim.status;
       if (result.flagged !== claim.isOverBudget || nextStatus !== claim.status) {
         await this.prisma.expenseClaim.update({
           where: { id: claim.id },
@@ -36,17 +36,31 @@ export class AdminBudgetService {
     const range = monthRange(month)!;
     const amount = toNumber(claim.amount);
     const [categorySpend, userSpend, roleCap] = await Promise.all([
+      claim.categoryId != null
+        ? this.prisma.expenseClaim.aggregate({
+            where: {
+              categoryId: claim.categoryId,
+              id: { not: claim.id },
+              status: { not: 'rejected' },
+              submissionDate: { gte: range.start, lt: range.end },
+            },
+            _sum: { amount: true },
+          })
+        : Promise.resolve({ _sum: { amount: null } }),
       this.prisma.expenseClaim.aggregate({
-        where: { categoryId: claim.categoryId, id: { not: claim.id }, status: { not: 'rejected' }, submissionDate: { gte: range.start, lt: range.end } },
+        where: {
+          userId: claim.userId,
+          id: { not: claim.id },
+          status: { not: 'rejected' },
+          submissionDate: { gte: range.start, lt: range.end },
+        },
         _sum: { amount: true },
       }),
-      this.prisma.expenseClaim.aggregate({
-        where: { userId: claim.userId, id: { not: claim.id }, status: { not: 'rejected' }, submissionDate: { gte: range.start, lt: range.end } },
-        _sum: { amount: true },
-      }),
-      claim.user.department ? this.prisma.roleCap.findUnique({ where: { role: claim.user.department } }) : Promise.resolve(null),
+      claim.user.department
+        ? this.prisma.roleCap.findUnique({ where: { role: claim.user.department } })
+        : Promise.resolve(null),
     ]);
-    const categoryCap = toNumber(claim.category.monthlyCap);
+    const categoryCap = claim.category ? toNumber(claim.category.monthlyCap) : 0;
     const categoryProjected = toNumber(categorySpend._sum.amount) + amount;
     const userBudget = toNumber(claim.user.monthlyBudget);
     const userProjected = toNumber(userSpend._sum.amount) + amount;

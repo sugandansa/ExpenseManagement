@@ -18,6 +18,17 @@ export class UpdateCategoryStatusDto {
 }
 export class CreateSubcategoryDto {
   @ApiProperty({ example: 'Tea' }) @IsString() @MaxLength(80) name!: string;
+  @ApiPropertyOptional({ example: 5000, description: 'Monthly budget limit for this subcategory' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  monthlyCap?: number;
+}
+
+export class UpdateSubcategoryDto {
+  @ApiPropertyOptional({ example: 'Tea' }) @IsOptional() @IsString() @MaxLength(80) name?: string;
+  @ApiPropertyOptional({ example: 5000 }) @IsOptional() @IsNumber() @Min(0) monthlyCap?: number;
+  @ApiPropertyOptional({ example: true }) @IsOptional() @IsBoolean() isActive?: boolean;
 }
 export class UpdateRoleCapDto {
   @ApiProperty({ example: 18000 }) @IsNumber() @Min(0) monthlyCap!: number;

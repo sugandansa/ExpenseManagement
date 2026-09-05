@@ -3,6 +3,9 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { monthRange } from '../common/utils/query';
 import { toNumber } from '../common/utils/crypto';
+import { OPEN_CLAIM_STATUSES, normalizeClaimStatus } from '../common/utils/claim-status';
+
+const OTHER_CATEGORY_ID = 0;
 
 @Injectable()
 export class EmployeeService {
@@ -20,15 +23,17 @@ export class EmployeeService {
       ? { submissionDate: { gte: range.start, lt: range.end } }
       : {};
 
+    const pendingStatuses = OPEN_CLAIM_STATUSES.filter((status) => status !== 'flagged');
+
     const [wallet, pending, paid, monthClaims, monthApproved, recentClaims] = await Promise.all([
       this.prisma.wallet.findUnique({ where: { userId } }),
       this.prisma.expenseClaim.aggregate({
-        where: { userId, status: { in: ['submitted', 'tagged', 'pending'] } },
+        where: { userId, status: { in: [...pendingStatuses] } },
         _count: { _all: true },
         _sum: { amount: true },
       }),
       this.prisma.expenseClaim.aggregate({
-        where: { userId, paymentStatus: 'paid' },
+        where: { userId, OR: [{ paymentStatus: 'paid' }, { status: { in: ['paid', 'settled'] } }] },
         _count: { _all: true },
         _sum: { amount: true },
       }),
@@ -44,7 +49,17 @@ export class EmployeeService {
         where: { userId },
         orderBy: { createdAt: 'desc' },
         take: 5,
-        select: { code: true, amount: true, status: true, submissionDate: true },
+        select: {
+          code: true,
+          amount: true,
+          status: true,
+          submissionDate: true,
+          categoryId: true,
+          subCategoryId: true,
+          otherCategory: true,
+          category: { select: { name: true } },
+          subCategory: { select: { name: true } },
+        },
       }),
     ]);
 
@@ -59,8 +74,13 @@ export class EmployeeService {
       recentClaims: recentClaims.map((claim) => ({
         claimId: claim.code,
         amount: toNumber(claim.amount),
-        status: claim.status,
+        status: normalizeClaimStatus(claim.status),
         date: claim.submissionDate,
+        category: claim.category?.name ?? 'Other',
+        categoryId: claim.categoryId ?? OTHER_CATEGORY_ID,
+        subCategory: claim.subCategory?.name ?? null,
+        subCategoryId: claim.subCategoryId ?? null,
+        otherCategory: claim.otherCategory,
       })),
     };
   }
