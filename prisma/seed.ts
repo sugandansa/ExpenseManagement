@@ -30,8 +30,13 @@ async function main() {
     await prisma.subCategory.upsert({ where: { id }, update: { name }, create: { id, categoryId, name } });
   }
   const settings = {
-    force_update_android: '1', force_update_ios: '0', min_app_version: '1.0.0',
-    update_url: 'https://play.google.com/store/apps/details?id=in.schoollift.expense', app_version: '2.0.0',
+    force_update_android: '1',
+    app_update_android: '1',
+    force_update_ios: '1.0.0',
+    app_update_ios: '1.0.0',
+    min_app_version: '1.0.0',
+    update_url: 'https://play.google.com/store/apps/details?id=in.schoollift.expense',
+    app_version: '2.0.0',
   };
   for (const [settingKey, settingValue] of Object.entries(settings)) {
     await prisma.appSetting.upsert({ where: { settingKey }, update: { settingValue }, create: { settingKey, settingValue } });

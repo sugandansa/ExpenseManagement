@@ -30,13 +30,17 @@ npm run start:dev
 
 Employee OTP login uses phone `9876543210`. Owner password login uses phone `9000000001` (set password hash in seed/admin SQL).
 
-## Test numbers
+## OTP / SMS
 
-There is no SMS provider wired up yet, so a random OTP can never reach a caller. Phones listed in
-`OTP_TEST_PHONES` always receive the fixed code in `OTP_TEST_CODE`; every other phone still gets a
-random six-digit code. Clear `OTP_TEST_CODE` to turn the whitelist off before going live with real SMS.
+Real numbers get a random six-digit code via MSG91 Flow (`MSG91_*` env vars, same DLT template as
+the SchoolLift API). Phones listed in `OTP_TEST_PHONES` skip SMS and always use `OTP_TEST_CODE`.
+Set `MSG91_AUTH_KEY=test` to mock MSG91 locally.
 
 ```
 OTP_TEST_CODE=123456
 OTP_TEST_PHONES=9876543210,9000000001
+MSG91_AUTH_KEY=...
+MSG91_TEMPLATE_ID=...
+MSG91_SENDER_ID=WHTOCN
+MSG91_OTP_VAR=num
 ```

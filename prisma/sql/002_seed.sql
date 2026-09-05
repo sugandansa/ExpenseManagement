@@ -25,7 +25,9 @@ ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 INSERT INTO `app_settings` (`setting_key`, `setting_value`) VALUES
   ('force_update_android', '1'),
-  ('force_update_ios', '0'),
+  ('app_update_android', '1'),
+  ('force_update_ios', '1.0.0'),
+  ('app_update_ios', '1.0.0'),
   ('min_app_version', '1.0.0'),
   ('update_url', 'https://play.google.com/store/apps/details?id=in.schoollift.expense'),
   ('app_version', '2.0.0')

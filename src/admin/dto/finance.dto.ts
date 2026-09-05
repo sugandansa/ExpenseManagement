@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ArrayNotEmpty, IsArray, IsInt, IsNumber, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { IntQuery } from '../../common/dto/int-query';
 
 export class CreateSettlementDto {
   @ApiProperty({ example: 101 }) @IsInt() employeeId!: number;
@@ -10,12 +11,12 @@ export class CreateSettlementDto {
 }
 export class SettlementHistoryQueryDto {
   @ApiPropertyOptional({ example: '2026-08' }) @IsOptional() @IsString() month?: string;
-  @ApiPropertyOptional({ example: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
-  @ApiPropertyOptional({ example: 20 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit = 20;
+  @ApiPropertyOptional({ example: 1 }) @IsOptional() @IntQuery(1) @Type(() => Number) @IsInt() @Min(1) page = 1;
+  @ApiPropertyOptional({ example: 20 }) @IsOptional() @IntQuery(20) @Type(() => Number) @IsInt() @Min(1) @Max(100) limit = 20;
 }
 export class LedgerQueryDto {
-  @ApiPropertyOptional({ example: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
-  @ApiPropertyOptional({ example: 20 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit = 20;
+  @ApiPropertyOptional({ example: 1 }) @IsOptional() @IntQuery(1) @Type(() => Number) @IsInt() @Min(1) page = 1;
+  @ApiPropertyOptional({ example: 20 }) @IsOptional() @IntQuery(20) @Type(() => Number) @IsInt() @Min(1) @Max(100) limit = 20;
   @ApiPropertyOptional({ example: '2026-08' }) @IsOptional() @IsString() month?: string;
 }
 export class MarkSettlementDto {

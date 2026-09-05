@@ -23,6 +23,7 @@ import {
   safeEqual,
   sha256,
 } from '../common/utils/crypto';
+import { Msg91Service } from '../common/sms/msg91.service';
 
 @Injectable()
 export class AuthService {
@@ -30,6 +31,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly msg91: Msg91Service,
   ) {}
 
   async sendOtp(dto: SendOtpDto) {
@@ -72,6 +74,13 @@ export class AuthService {
 
     if (this.config.get('NODE_ENV') !== 'production') {
       console.log(`[OTP] ${dto.phone} -> ${otp} (${requestId})`);
+    }
+
+    if (!this.isTestPhone(dto.phone)) {
+      const sent = await this.msg91.sendOtp(dto.phone, otp, user?.name || 'User');
+      if (!sent) {
+        throw new HttpException('Failed to send OTP', HttpStatus.BAD_GATEWAY);
+      }
     }
 
     return {
@@ -199,7 +208,7 @@ export class AuthService {
   }
 
   private async issueSession(
-    user: { id: number; name: string; role: string },
+    user: { id: number; name: string; role: string; department: string | null },
     deviceId: string,
     refreshDays: number,
     accessExpiresIn: number,
@@ -221,6 +230,7 @@ export class AuthService {
         id: user.id,
         name: user.name,
         role: user.role,
+        department: user.department,
       },
     };
   }
@@ -234,16 +244,22 @@ export class AuthService {
    * sign in without SMS delivery. Every other number gets a random code.
    */
   private resolveOtp(phone: string): string {
-    const testCode = (this.config.get<string>('OTP_TEST_CODE') || '').trim();
-    const testPhones = (this.config.get<string>('OTP_TEST_PHONES') || '')
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-
-    if (testCode && testPhones.includes(phone)) {
-      return testCode;
+    if (this.isTestPhone(phone)) {
+      return (this.config.get<string>('OTP_TEST_CODE') || '').trim();
     }
     return generateOtp();
+  }
+
+  private isTestPhone(phone: string): boolean {
+    const testCode = (this.config.get<string>('OTP_TEST_CODE') || '').trim();
+    if (!testCode) {
+      return false;
+    }
+    return (this.config.get<string>('OTP_TEST_PHONES') || '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .includes(phone);
   }
 
   private signAccess(userId: number, role: string, expiresIn: number) {
