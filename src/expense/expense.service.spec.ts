@@ -32,7 +32,7 @@ describe('ExpenseService', () => {
       subCategoryId: 3,
       submissionDate: Math.floor(Date.now() / 1000),
     });
-    expect(result.status).toBe('flagged');
+    expect(result.status).toBe('pending');
     expect(result.isOverBudget).toBe(true);
     expect(tx.expenseClaim.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -124,7 +124,48 @@ describe('ExpenseService', () => {
     );
   });
 
-  it('returns category and subcategory budget limits with remaining', async () => {
+  it('accepts category-only submissions without subCategoryId', async () => {
+    const tx = {
+      expenseClaim: {
+        create: jest.fn().mockResolvedValue({ id: 8 }),
+        update: jest
+          .fn()
+          .mockResolvedValue({ code: 'C_8', amount: 100, note: null, otherCategory: null, status: 'pending' }),
+      },
+      claimEvent: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      receipt: { findUnique: jest.fn().mockResolvedValue({ id: 4, userId: 7 }) },
+      expenseClaim: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 0 } }),
+      },
+      category: { findFirst: jest.fn().mockResolvedValue({ id: 5 }) },
+      subCategory: { findFirst: jest.fn() },
+      user: { findUnique: jest.fn().mockResolvedValue({ monthlyBudget: 5000 }) },
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaService;
+    const service = new ExpenseService(prisma, {} as StorageService);
+    const result = await service.submit(7, {
+      receiptId: 'RC_40',
+      amount: 100,
+      categoryId: 5,
+      submissionDate: Math.floor(Date.now() / 1000),
+    });
+    expect(result.status).toBe('pending');
+    expect(prisma.subCategory.findFirst).not.toHaveBeenCalled();
+    expect(tx.expenseClaim.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          categoryId: 5,
+          subCategoryId: null,
+          status: 'pending',
+        }),
+      }),
+    );
+  });
+
+  it('returns category budget limits; subcategories only expose id and name', async () => {
     const prisma = {
       category: {
         findMany: jest.fn().mockResolvedValue([
@@ -133,15 +174,12 @@ describe('ExpenseService', () => {
             name: 'Office',
             iconCategory: 'office',
             monthlyCap: 30000,
-            subCategories: [{ id: 6, name: 'Stationery', monthlyCap: 5000 }],
+            subCategories: [{ id: 6, name: 'Stationery' }],
           },
         ]),
       },
       expenseClaim: {
-        groupBy: jest
-          .fn()
-          .mockResolvedValueOnce([{ categoryId: 3, _sum: { amount: 1000 } }])
-          .mockResolvedValueOnce([{ subCategoryId: 6, _sum: { amount: 1200 } }]),
+        groupBy: jest.fn().mockResolvedValue([{ categoryId: 3, _sum: { amount: 1000 } }]),
       },
     } as unknown as PrismaService;
     const service = new ExpenseService(prisma, {} as StorageService);
@@ -154,14 +192,10 @@ describe('ExpenseService', () => {
       remainingAfter: 28000,
       fitsBudget: true,
     });
-    expect(result[0].subCategories[0]).toMatchObject({
+    expect(result[0].subCategories[0]).toEqual({
       id: 6,
       name: 'Stationery',
-      limit: 5000,
-      used: 1200,
-      remaining: 3800,
-      remainingAfter: 2800,
-      fitsBudget: true,
     });
+    expect(prisma.expenseClaim.groupBy).toHaveBeenCalledTimes(1);
   });
 });

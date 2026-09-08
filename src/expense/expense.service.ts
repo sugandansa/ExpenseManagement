@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { currentMonth, monthRange, normalizePage, paginateMeta } from '../common/utils/query';
 import { publicCode, toNumber } from '../common/utils/crypto';
-import { historyStatusWhere, normalizeClaimStatus } from '../common/utils/claim-status';
+import { historyStatusWhere, normalizeEmployeeClaimStatus } from '../common/utils/claim-status';
 import { SubmitExpenseDto } from './dto/submit-expense.dto';
 import { HistoryQueryDto } from './dto/history-query.dto';
 
@@ -40,36 +40,23 @@ export class ExpenseService {
         subCategories: {
           where: { isActive: true },
           orderBy: { id: 'asc' },
-          select: { id: true, name: true, monthlyCap: true },
+          select: { id: true, name: true },
         },
       },
     });
 
-    const [categoryUsage, subCategoryUsage] = await Promise.all([
-      this.prisma.expenseClaim.groupBy({
-        by: ['categoryId'],
-        where: {
-          userId,
-          status: { not: 'rejected' },
-          categoryId: { not: null },
-          submissionDate: { gte: range.start, lt: range.end },
-        },
-        _sum: { amount: true },
-      }),
-      this.prisma.expenseClaim.groupBy({
-        by: ['subCategoryId'],
-        where: {
-          userId,
-          status: { not: 'rejected' },
-          subCategoryId: { not: null },
-          submissionDate: { gte: range.start, lt: range.end },
-        },
-        _sum: { amount: true },
-      }),
-    ]);
+    const categoryUsage = await this.prisma.expenseClaim.groupBy({
+      by: ['categoryId'],
+      where: {
+        userId,
+        status: { not: 'rejected' },
+        categoryId: { not: null },
+        submissionDate: { gte: range.start, lt: range.end },
+      },
+      _sum: { amount: true },
+    });
 
     const categoryUsed = new Map(categoryUsage.map((row) => [row.categoryId!, toNumber(row._sum.amount)]));
-    const subUsed = new Map(subCategoryUsage.map((row) => [row.subCategoryId!, toNumber(row._sum.amount)]));
 
     const catalog = rows.map((category) => {
       const limit = toNumber(category.monthlyCap);
@@ -79,15 +66,11 @@ export class ExpenseService {
         name: category.name,
         iconCategory: category.iconCategory,
         ...budgetFields(limit, used, amount),
-        subCategories: category.subCategories.map((sub) => {
-          const subLimit = toNumber(sub.monthlyCap);
-          const subUsedAmount = subUsed.get(sub.id) ?? 0;
-          return {
-            id: sub.id,
-            name: sub.name,
-            ...budgetFields(subLimit, subUsedAmount, amount),
-          };
-        }),
+        // Sub-categories have no budget limits — return id/name only
+        subCategories: category.subCategories.map((sub) => ({
+          id: sub.id,
+          name: sub.name,
+        })),
       };
     });
 
@@ -142,13 +125,14 @@ export class ExpenseService {
     } else {
       const category = await this.prisma.category.findFirst({ where: { id: dto.categoryId, isActive: true } });
       if (!category) throw new BadRequestException('Invalid category');
-      if (dto.subCategoryId == null) throw new BadRequestException('subCategoryId is required for catalog categories');
-      const subCategory = await this.prisma.subCategory.findFirst({
-        where: { id: dto.subCategoryId, categoryId: dto.categoryId, isActive: true },
-      });
-      if (!subCategory) throw new BadRequestException('Invalid sub-category for the selected category');
       categoryId = dto.categoryId;
-      subCategoryId = dto.subCategoryId;
+      if (dto.subCategoryId != null) {
+        const subCategory = await this.prisma.subCategory.findFirst({
+          where: { id: dto.subCategoryId, categoryId: dto.categoryId, isActive: true },
+        });
+        if (!subCategory) throw new BadRequestException('Invalid sub-category for the selected category');
+        subCategoryId = dto.subCategoryId;
+      }
     }
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
@@ -204,7 +188,7 @@ export class ExpenseService {
       amount: toNumber(claim.amount),
       note: claim.note,
       otherCategory: claim.otherCategory,
-      status: normalizeClaimStatus(claim.status),
+      status: normalizeEmployeeClaimStatus(claim.status),
       isOverBudget,
       overBudgetAmount,
       overBudgetReason: isOverBudget ? `This claim exceeds the monthly budget by ${overBudgetAmount}` : null,
@@ -250,7 +234,7 @@ export class ExpenseService {
         subCategory: row.subCategory?.name ?? null,
         subCategoryId: row.subCategoryId ?? null,
         otherCategory: row.otherCategory,
-        status: normalizeClaimStatus(row.status),
+        status: normalizeEmployeeClaimStatus(row.status),
         submissionDate: row.submissionDate,
         isOverBudget: row.isOverBudget,
       })),
@@ -269,7 +253,7 @@ export class ExpenseService {
       subCategoryId: claim.subCategoryId ?? null,
       otherCategory: claim.otherCategory,
       note: claim.note,
-      status: normalizeClaimStatus(claim.status),
+      status: normalizeEmployeeClaimStatus(claim.status),
       approvalStatus: claim.approvalStatus,
       paymentStatus: claim.paymentStatus,
       rejectionReason: claim.rejectionReason,
@@ -278,7 +262,7 @@ export class ExpenseService {
       overBudgetAmount: toNumber(claim.overBudgetAmount),
       submissionDate: claim.submissionDate,
       timeline: claim.events.map((event) => ({
-        status: normalizeClaimStatus(event.status),
+        status: normalizeEmployeeClaimStatus(event.status),
         note: event.note,
         at: event.createdAt,
       })),
@@ -289,11 +273,11 @@ export class ExpenseService {
     const claim = await this.findOwned(userId, claimId);
     return {
       claimId: claim.code,
-      status: normalizeClaimStatus(claim.status),
+      status: normalizeEmployeeClaimStatus(claim.status),
       approvalStatus: claim.approvalStatus,
       paymentStatus: claim.paymentStatus,
       history: claim.events.map((event) => ({
-        status: normalizeClaimStatus(event.status),
+        status: normalizeEmployeeClaimStatus(event.status),
         note: event.note,
         at: event.createdAt,
       })),

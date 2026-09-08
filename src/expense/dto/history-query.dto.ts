@@ -5,7 +5,10 @@ import { IntQuery } from '../../common/dto/int-query';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 
 export class HistoryQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({ example: 'all', description: 'pending | flagged | approved | paid | all' })
+  @ApiPropertyOptional({
+    example: 'all',
+    description: 'pending | approved | paid | all (over-budget claims return as pending with isOverBudget)',
+  })
   @IsOptional()
   @IsString()
   status = 'all';

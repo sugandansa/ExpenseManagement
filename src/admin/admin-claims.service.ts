@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { toNumber } from '../common/utils/crypto';
 import { monthRange, normalizePage, paginateMeta } from '../common/utils/query';
-import { OPEN_CLAIM_STATUSES } from './admin.constants';
+import { CLOSED_CLAIM_STATUSES, OPEN_CLAIM_STATUSES } from './admin.constants';
 import { historyStatusWhere, normalizeClaimStatus } from '../common/utils/claim-status';
 import { AdminBudgetService } from './admin-budget.service';
 import { AdminClaimsQueryDto, ApproveClaimDto, BulkApproveDto, RejectClaimDto } from './dto/claims.dto';
@@ -34,6 +34,8 @@ export class AdminClaimsService {
       } else if (query.status === 'flagged') {
         where.approvalStatus = 'pending';
         where.OR = [{ status: 'flagged' }, { isOverBudget: true }];
+      } else if (query.status === 'closed') {
+        where.status = { in: [...CLOSED_CLAIM_STATUSES] };
       } else {
         const statusFilter = historyStatusWhere(query.status);
         if (statusFilter) where.status = statusFilter;
@@ -46,7 +48,7 @@ export class AdminClaimsService {
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
-        include: { user: true, category: true },
+        include: { user: true, category: true, receipt: true },
       }),
       this.prisma.expenseClaim.count({
         where: { approvalStatus: 'pending', status: { in: [...OPEN_CLAIM_STATUSES] } },
@@ -66,6 +68,7 @@ export class AdminClaimsService {
         status: normalizeClaimStatus(row.status),
         isOverBudget: row.isOverBudget,
         submissionDate: row.submissionDate,
+        receiptUrl: row.receipt.fileUrl,
       })),
       pagination: paginateMeta(page, limit, total),
       summary: { open, flagged },
