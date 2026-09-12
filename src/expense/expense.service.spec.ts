@@ -3,13 +3,19 @@ import { StorageService } from '../storage/storage.service';
 import { ExpenseService } from './expense.service';
 
 describe('ExpenseService', () => {
-  it('flags an over-budget submission', async () => {
+  it('flags an over-budget submission against category cap', async () => {
     const tx = {
       expenseClaim: {
         create: jest.fn().mockResolvedValue({ id: 5 }),
-        update: jest
-          .fn()
-          .mockResolvedValue({ code: 'C_5', amount: 60, note: null, otherCategory: null, status: 'flagged' }),
+        update: jest.fn().mockResolvedValue({
+          code: 'C_5',
+          amount: 60,
+          note: null,
+          otherCategory: null,
+          categoryId: 2,
+          subCategoryId: 3,
+          status: 'flagged',
+        }),
       },
       claimEvent: { create: jest.fn().mockResolvedValue({}) },
     };
@@ -19,9 +25,8 @@ describe('ExpenseService', () => {
         findUnique: jest.fn().mockResolvedValue(null),
         aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 70 } }),
       },
-      category: { findFirst: jest.fn().mockResolvedValue({ id: 2 }) },
+      category: { findFirst: jest.fn().mockResolvedValue({ id: 2, monthlyCap: 100 }) },
       subCategory: { findFirst: jest.fn().mockResolvedValue({ id: 3 }) },
-      user: { findUnique: jest.fn().mockResolvedValue({ monthlyBudget: 100 }) },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     } as unknown as PrismaService;
     const service = new ExpenseService(prisma, {} as StorageService);
@@ -34,6 +39,7 @@ describe('ExpenseService', () => {
     });
     expect(result.status).toBe('pending');
     expect(result.isOverBudget).toBe(true);
+    expect(result.overBudgetAmount).toBe(30);
     expect(tx.expenseClaim.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'flagged', isOverBudget: true }),
@@ -45,9 +51,15 @@ describe('ExpenseService', () => {
     const tx = {
       expenseClaim: {
         create: jest.fn().mockResolvedValue({ id: 6 }),
-        update: jest
-          .fn()
-          .mockResolvedValue({ code: 'C_6', amount: 20, note: null, otherCategory: null, status: 'pending' }),
+        update: jest.fn().mockResolvedValue({
+          code: 'C_6',
+          amount: 20,
+          note: null,
+          otherCategory: null,
+          categoryId: 2,
+          subCategoryId: 3,
+          status: 'pending',
+        }),
       },
       claimEvent: { create: jest.fn().mockResolvedValue({}) },
     };
@@ -57,9 +69,8 @@ describe('ExpenseService', () => {
         findUnique: jest.fn().mockResolvedValue(null),
         aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 10 } }),
       },
-      category: { findFirst: jest.fn().mockResolvedValue({ id: 2 }) },
+      category: { findFirst: jest.fn().mockResolvedValue({ id: 2, monthlyCap: 5000 }) },
       subCategory: { findFirst: jest.fn().mockResolvedValue({ id: 3 }) },
-      user: { findUnique: jest.fn().mockResolvedValue({ monthlyBudget: 100 }) },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     } as unknown as PrismaService;
     const service = new ExpenseService(prisma, {} as StorageService);
@@ -71,11 +82,51 @@ describe('ExpenseService', () => {
       submissionDate: Math.floor(Date.now() / 1000),
     });
     expect(result.status).toBe('pending');
+    expect(result.isOverBudget).toBe(false);
     expect(tx.expenseClaim.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'pending', isOverBudget: false }),
       }),
     );
+  });
+
+  it('does not flag against user monthly budget when category still has room', async () => {
+    const tx = {
+      expenseClaim: {
+        create: jest.fn().mockResolvedValue({ id: 31 }),
+        update: jest.fn().mockResolvedValue({
+          code: 'C_31',
+          amount: 100,
+          note: null,
+          otherCategory: null,
+          categoryId: 5,
+          subCategoryId: 10,
+          status: 'pending',
+        }),
+      },
+      claimEvent: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      receipt: { findUnique: jest.fn().mockResolvedValue({ id: 48, userId: 101 }) },
+      expenseClaim: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        // Cleaning category used only 100 so far; user personal budget may be nearly full
+        aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 100 } }),
+      },
+      category: { findFirst: jest.fn().mockResolvedValue({ id: 5, monthlyCap: 5000 }) },
+      subCategory: { findFirst: jest.fn().mockResolvedValue({ id: 10 }) },
+      $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaService;
+    const service = new ExpenseService(prisma, {} as StorageService);
+    const result = await service.submit(101, {
+      receiptId: 'RC_48',
+      amount: 100,
+      categoryId: 5,
+      subCategoryId: 10,
+      submissionDate: Math.floor(Date.now() / 1000),
+    });
+    expect(result.status).toBe('pending');
+    expect(result.isOverBudget).toBe(false);
   });
 
   it('accepts Other category with otherCategory text', async () => {
@@ -87,6 +138,8 @@ describe('ExpenseService', () => {
           amount: 100,
           note: 'Fbbff',
           otherCategory: 'Other note',
+          categoryId: null,
+          subCategoryId: null,
           status: 'pending',
         }),
       },
@@ -128,9 +181,15 @@ describe('ExpenseService', () => {
     const tx = {
       expenseClaim: {
         create: jest.fn().mockResolvedValue({ id: 8 }),
-        update: jest
-          .fn()
-          .mockResolvedValue({ code: 'C_8', amount: 100, note: null, otherCategory: null, status: 'pending' }),
+        update: jest.fn().mockResolvedValue({
+          code: 'C_8',
+          amount: 100,
+          note: null,
+          otherCategory: null,
+          categoryId: 6,
+          subCategoryId: null,
+          status: 'pending',
+        }),
       },
       claimEvent: { create: jest.fn().mockResolvedValue({}) },
     };
@@ -140,24 +199,24 @@ describe('ExpenseService', () => {
         findUnique: jest.fn().mockResolvedValue(null),
         aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 0 } }),
       },
-      category: { findFirst: jest.fn().mockResolvedValue({ id: 5 }) },
-      subCategory: { findFirst: jest.fn() },
-      user: { findUnique: jest.fn().mockResolvedValue({ monthlyBudget: 5000 }) },
+      category: { findFirst: jest.fn().mockResolvedValue({ id: 6, monthlyCap: 10000 }) },
+      subCategory: { findFirst: jest.fn(), create: jest.fn() },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) => callback(tx)),
     } as unknown as PrismaService;
     const service = new ExpenseService(prisma, {} as StorageService);
     const result = await service.submit(7, {
-      receiptId: 'RC_40',
+      receiptId: 'RC_48',
       amount: 100,
-      categoryId: 5,
+      categoryId: 6,
       submissionDate: Math.floor(Date.now() / 1000),
     });
     expect(result.status).toBe('pending');
-    expect(prisma.subCategory.findFirst).not.toHaveBeenCalled();
+    expect(result.subCategoryId).toBeNull();
+    expect(prisma.subCategory.create).not.toHaveBeenCalled();
     expect(tx.expenseClaim.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          categoryId: 5,
+          categoryId: 6,
           subCategoryId: null,
           status: 'pending',
         }),

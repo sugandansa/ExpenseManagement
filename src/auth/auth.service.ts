@@ -15,14 +15,7 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { RefreshTokenDto } from './dto/refresh.dto';
 import { LogoutDto } from './dto/logout.dto';
 import { LoginDto } from './dto/login.dto';
-import {
-  generateOtp,
-  generateRefreshToken,
-  hashOtp,
-  publicCode,
-  safeEqual,
-  sha256,
-} from '../common/utils/crypto';
+import { generateOtp, generateRefreshToken, hashOtp, publicCode, safeEqual, sha256 } from '../common/utils/crypto';
 import { Msg91Service } from '../common/sms/msg91.service';
 
 @Injectable()
@@ -198,11 +191,30 @@ export class AuthService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+
+    let jobRole: { id: number; name: string } | null = null;
+    if (user.roleCapId != null) {
+      const cap = await this.prisma.roleCap.findUnique({ where: { id: user.roleCapId } });
+      if (cap) jobRole = { id: cap.id, name: cap.role };
+    } else if (user.department) {
+      const roles = await this.prisma.roleCap.findMany();
+      const key = user.department.toLowerCase().replace(/[\s_-]+/g, '');
+      const cap = roles.find((r) => r.role.toLowerCase().replace(/[\s_-]+/g, '') === key);
+      if (cap) {
+        jobRole = { id: cap.id, name: cap.role };
+        // Additive heal only — do not change department/name.
+        await this.prisma.user.update({ where: { id: user.id }, data: { roleCapId: cap.id } });
+      }
+    }
+
     return {
       id: user.id,
       name: user.name,
+      email: user.email,
       role: user.role,
+      jobRole,
       department: user.department,
+      phone: user.phone,
       phoneNumber: user.phone,
     };
   }

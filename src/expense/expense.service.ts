@@ -5,6 +5,7 @@ import { StorageService } from '../storage/storage.service';
 import { currentMonth, monthRange, normalizePage, paginateMeta } from '../common/utils/query';
 import { publicCode, toNumber } from '../common/utils/crypto';
 import { historyStatusWhere, normalizeEmployeeClaimStatus } from '../common/utils/claim-status';
+import { buildClaimTimeline } from '../common/utils/claim-timeline';
 import { SubmitExpenseDto } from './dto/submit-expense.dto';
 import { HistoryQueryDto } from './dto/history-query.dto';
 
@@ -113,10 +114,14 @@ export class ExpenseService {
       throw new ConflictException('This receipt is already attached to a claim');
     }
 
+    const submissionDate = new Date(dto.submissionDate * 1000);
+    if (Number.isNaN(submissionDate.getTime())) throw new BadRequestException('Invalid submissionDate');
+
     const isOther = dto.categoryId === OTHER_CATEGORY_ID;
     let categoryId: number | null = null;
     let subCategoryId: number | null = null;
     let otherCategory: string | null = null;
+    let categoryMonthlyCap = 0;
 
     if (isOther) {
       const label = dto.otherCategory?.trim();
@@ -126,6 +131,7 @@ export class ExpenseService {
       const category = await this.prisma.category.findFirst({ where: { id: dto.categoryId, isActive: true } });
       if (!category) throw new BadRequestException('Invalid category');
       categoryId = dto.categoryId;
+      categoryMonthlyCap = toNumber(category.monthlyCap);
       if (dto.subCategoryId != null) {
         const subCategory = await this.prisma.subCategory.findFirst({
           where: { id: dto.subCategoryId, categoryId: dto.categoryId, isActive: true },
@@ -133,23 +139,52 @@ export class ExpenseService {
         if (!subCategory) throw new BadRequestException('Invalid sub-category for the selected category');
         subCategoryId = dto.subCategoryId;
       }
+      // subCategoryId stays null when omitted — category-only is valid
     }
 
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    const now = new Date();
-    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-    const approved = await this.prisma.expenseClaim.aggregate({
-      where: { userId, approvalStatus: 'approved', submissionDate: { gte: monthStart, lt: monthEnd } },
-      _sum: { amount: true },
-    });
-    const spent = toNumber(approved._sum.amount);
-    const budget = user?.monthlyBudget ? toNumber(user.monthlyBudget) : 0;
-    const projected = spent + dto.amount;
-    const isOverBudget = budget > 0 && projected > budget;
-    const overBudgetAmount = isOverBudget ? Number((projected - budget).toFixed(2)) : 0;
-    const submissionDate = new Date(dto.submissionDate * 1000);
-    if (Number.isNaN(submissionDate.getTime())) throw new BadRequestException('Invalid submissionDate');
+    const range = monthRange(
+      `${submissionDate.getUTCFullYear()}-${String(submissionDate.getUTCMonth() + 1).padStart(2, '0')}`,
+    )!;
+
+    let isOverBudget = false;
+    let overBudgetAmount = 0;
+    let overBudgetReason: string | null = null;
+
+    if (categoryId != null) {
+      // Match categories API: this employee's usage of this category vs category monthly cap
+      const categoryUsed = await this.prisma.expenseClaim.aggregate({
+        where: {
+          userId,
+          categoryId,
+          status: { not: 'rejected' },
+          submissionDate: { gte: range.start, lt: range.end },
+        },
+        _sum: { amount: true },
+      });
+      const projected = toNumber(categoryUsed._sum.amount) + dto.amount;
+      if (categoryMonthlyCap > 0 && projected > categoryMonthlyCap) {
+        isOverBudget = true;
+        overBudgetAmount = Number((projected - categoryMonthlyCap).toFixed(2));
+        overBudgetReason = `This claim exceeds the category budget by ${overBudgetAmount}`;
+      }
+    } else {
+      const user = await this.prisma.user.findUnique({ where: { id: userId } });
+      const used = await this.prisma.expenseClaim.aggregate({
+        where: {
+          userId,
+          status: { not: 'rejected' },
+          submissionDate: { gte: range.start, lt: range.end },
+        },
+        _sum: { amount: true },
+      });
+      const budget = user?.monthlyBudget ? toNumber(user.monthlyBudget) : 0;
+      const projected = toNumber(used._sum.amount) + dto.amount;
+      if (budget > 0 && projected > budget) {
+        isOverBudget = true;
+        overBudgetAmount = Number((projected - budget).toFixed(2));
+        overBudgetReason = `This claim exceeds the monthly budget by ${overBudgetAmount}`;
+      }
+    }
 
     const status = isOverBudget ? 'flagged' : 'pending';
     const claim = await this.prisma.$transaction(async (tx) => {
@@ -177,7 +212,7 @@ export class ExpenseService {
         data: {
           claimId: created.id,
           actorId: userId,
-          status,
+          status: 'submitted',
           note: isOverBudget ? 'Expense submitted over budget' : 'Expense submitted',
         },
       });
@@ -188,10 +223,12 @@ export class ExpenseService {
       amount: toNumber(claim.amount),
       note: claim.note,
       otherCategory: claim.otherCategory,
+      categoryId: claim.categoryId ?? OTHER_CATEGORY_ID,
+      subCategoryId: claim.subCategoryId,
       status: normalizeEmployeeClaimStatus(claim.status),
       isOverBudget,
       overBudgetAmount,
-      overBudgetReason: isOverBudget ? `This claim exceeds the monthly budget by ${overBudgetAmount}` : null,
+      overBudgetReason,
     };
   }
 
@@ -247,6 +284,8 @@ export class ExpenseService {
     return {
       claimId: claim.code,
       amount: toNumber(claim.amount),
+      paidAmount: toNumber(claim.paidAmount),
+      remainingAmount: Number(Math.max(0, toNumber(claim.amount) - toNumber(claim.paidAmount)).toFixed(2)),
       category: claim.category?.name ?? 'Other',
       categoryId: claim.categoryId ?? OTHER_CATEGORY_ID,
       subCategory: claim.subCategory?.name ?? null,
@@ -261,11 +300,7 @@ export class ExpenseService {
       isOverBudget: claim.isOverBudget,
       overBudgetAmount: toNumber(claim.overBudgetAmount),
       submissionDate: claim.submissionDate,
-      timeline: claim.events.map((event) => ({
-        status: normalizeEmployeeClaimStatus(event.status),
-        note: event.note,
-        at: event.createdAt,
-      })),
+      timeline: buildClaimTimeline(claim),
     };
   }
 
@@ -276,18 +311,22 @@ export class ExpenseService {
       status: normalizeEmployeeClaimStatus(claim.status),
       approvalStatus: claim.approvalStatus,
       paymentStatus: claim.paymentStatus,
-      history: claim.events.map((event) => ({
-        status: normalizeEmployeeClaimStatus(event.status),
-        note: event.note,
-        at: event.createdAt,
-      })),
+      paidAmount: toNumber(claim.paidAmount),
+      remainingAmount: Number(Math.max(0, toNumber(claim.amount) - toNumber(claim.paidAmount)).toFixed(2)),
+      history: buildClaimTimeline(claim),
     };
   }
 
   private async findOwned(userId: number, claimId: string) {
     const claim = await this.prisma.expenseClaim.findUnique({
       where: { code: claimId },
-      include: { category: true, subCategory: true, receipt: true, events: { orderBy: { createdAt: 'asc' } } },
+      include: {
+        category: true,
+        subCategory: true,
+        receipt: true,
+        settlement: true,
+        events: { orderBy: { createdAt: 'asc' } },
+      },
     });
     if (!claim || claim.userId !== userId) throw new NotFoundException('Claim not found');
     return claim;

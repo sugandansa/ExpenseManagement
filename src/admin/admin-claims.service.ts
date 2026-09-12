@@ -5,6 +5,7 @@ import { toNumber } from '../common/utils/crypto';
 import { monthRange, normalizePage, paginateMeta } from '../common/utils/query';
 import { CLOSED_CLAIM_STATUSES, OPEN_CLAIM_STATUSES } from './admin.constants';
 import { historyStatusWhere, normalizeClaimStatus } from '../common/utils/claim-status';
+import { buildClaimTimeline } from '../common/utils/claim-timeline';
 import { AdminBudgetService } from './admin-budget.service';
 import { AdminClaimsQueryDto, ApproveClaimDto, BulkApproveDto, RejectClaimDto } from './dto/claims.dto';
 
@@ -35,13 +36,17 @@ export class AdminClaimsService {
         where.approvalStatus = 'pending';
         where.OR = [{ status: 'flagged' }, { isOverBudget: true }];
       } else if (query.status === 'closed') {
-        where.status = { in: [...CLOSED_CLAIM_STATUSES] };
+        // Approved / rejected / paid claims (decision made), including approvalStatus fallback
+        where.OR = [
+          { status: { in: [...CLOSED_CLAIM_STATUSES] } },
+          { approvalStatus: { in: ['approved', 'rejected'] } },
+        ];
       } else {
         const statusFilter = historyStatusWhere(query.status);
         if (statusFilter) where.status = statusFilter;
       }
     }
-    const [total, rows, open, flagged] = await this.prisma.$transaction([
+    const [total, rows, open, flagged, closed] = await this.prisma.$transaction([
       this.prisma.expenseClaim.count({ where }),
       this.prisma.expenseClaim.findMany({
         where,
@@ -56,22 +61,36 @@ export class AdminClaimsService {
       this.prisma.expenseClaim.count({
         where: { approvalStatus: 'pending', OR: [{ status: 'flagged' }, { isOverBudget: true }] },
       }),
+      this.prisma.expenseClaim.count({
+        where: {
+          OR: [{ status: { in: [...CLOSED_CLAIM_STATUSES] } }, { approvalStatus: { in: ['approved', 'rejected'] } }],
+        },
+      }),
     ]);
     return {
-      items: rows.map((row) => ({
-        claimId: row.code,
-        employeeId: row.user.id,
-        employee: row.user.name,
-        amount: toNumber(row.amount),
-        category: row.category?.name ?? 'Other',
-        otherCategory: row.otherCategory,
-        status: normalizeClaimStatus(row.status),
-        isOverBudget: row.isOverBudget,
-        submissionDate: row.submissionDate,
-        receiptUrl: row.receipt.fileUrl,
-      })),
+      items: rows.map((row) => {
+        const amount = toNumber(row.amount);
+        const paidAmount = toNumber(row.paidAmount);
+        return {
+          claimId: row.code,
+          employeeId: row.user.id,
+          employee: row.user.name,
+          role: row.user.department ?? row.user.role,
+          amount,
+          paidAmount,
+          remainingAmount: Number(Math.max(0, amount - paidAmount).toFixed(2)),
+          category: row.category?.name ?? 'Other',
+          otherCategory: row.otherCategory,
+          status: normalizeClaimStatus(row.status),
+          approvalStatus: row.approvalStatus,
+          paymentStatus: row.paymentStatus,
+          isOverBudget: row.isOverBudget,
+          submissionDate: row.submissionDate,
+          receiptUrl: row.receipt?.fileUrl ?? null,
+        };
+      }),
       pagination: paginateMeta(page, limit, total),
-      summary: { open, flagged },
+      summary: { open, flagged, closed },
     };
   }
 
@@ -88,19 +107,24 @@ export class AdminClaimsService {
         },
         _sum: { amount: true },
       }),
-      claim.user.department
-        ? this.prisma.roleCap.findUnique({ where: { role: claim.user.department } })
-        : Promise.resolve(null),
+      claim.user.roleCapId != null
+        ? this.prisma.roleCap.findUnique({ where: { id: claim.user.roleCapId } })
+        : claim.user.department
+          ? this.prisma.roleCap.findUnique({ where: { role: claim.user.department } })
+          : Promise.resolve(null),
     ]);
+    const jobRoleName = roleCap?.role ?? claim.user.department ?? claim.user.role;
     return {
       id: claim.code,
       employee: {
         id: claim.user.id,
         name: claim.user.name,
-        role: claim.user.department ?? claim.user.role,
+        role: jobRoleName,
         phoneNumber: claim.user.phone,
       },
       amount: toNumber(claim.amount),
+      paidAmount: toNumber(claim.paidAmount),
+      remainingAmount: Number(Math.max(0, toNumber(claim.amount) - toNumber(claim.paidAmount)).toFixed(2)),
       category: claim.category?.name ?? 'Other',
       subCategory: claim.subCategory?.name ?? null,
       otherCategory: claim.otherCategory,
@@ -111,12 +135,8 @@ export class AdminClaimsService {
       paymentStatus: claim.paymentStatus,
       rejectionReason: claim.rejectionReason,
       budget: { categoryCap: toNumber(claim.category?.monthlyCap), usedAmount: toNumber(categoryUsed._sum.amount) },
-      roleCap: { role: claim.user.department, monthlyCap: roleCap ? toNumber(roleCap.monthlyCap) : 0 },
-      timeline: claim.events.map((event) => ({
-        status: normalizeClaimStatus(event.status),
-        note: event.note,
-        at: event.createdAt,
-      })),
+      roleCap: { role: roleCap?.role ?? claim.user.department, monthlyCap: roleCap ? toNumber(roleCap.monthlyCap) : 0 },
+      timeline: buildClaimTimeline(claim),
     };
   }
 
@@ -126,9 +146,17 @@ export class AdminClaimsService {
     const amount = toNumber(claim.amount);
     const approvedAt = new Date();
     await this.prisma.$transaction(async (tx) => {
+      // Credit wallet now; claim stays approved until settlement marks it paid
       await tx.expenseClaim.update({
         where: { id: claim.id },
-        data: { status: 'approved', approvalStatus: 'approved', approvedAt, approvalComment: dto.comment ?? null },
+        data: {
+          status: 'approved',
+          approvalStatus: 'approved',
+          paymentStatus: 'pending',
+          paidAmount: 0,
+          approvedAt,
+          approvalComment: dto.comment ?? null,
+        },
       });
       await tx.claimEvent.create({
         data: { claimId: claim.id, actorId, status: 'approved', note: dto.comment ?? 'Claim approved' },
@@ -184,7 +212,7 @@ export class AdminClaimsService {
   }
 
   private assertPending(claim: { approvalStatus: string; status: string }) {
-    if (claim.approvalStatus !== 'pending' || ['approved', 'rejected'].includes(claim.status))
+    if (claim.approvalStatus !== 'pending' || ['approved', 'rejected', 'paid', 'settled'].includes(claim.status))
       throw new ConflictException('Claim is not pending approval');
   }
 
@@ -196,6 +224,7 @@ export class AdminClaimsService {
         category: true,
         subCategory: true,
         receipt: true,
+        settlement: true,
         events: { orderBy: { createdAt: 'asc' } },
       },
     });

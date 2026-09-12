@@ -3,7 +3,22 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { publicCode, toNumber } from '../common/utils/crypto';
 import { monthRange, normalizePage, paginateMeta } from '../common/utils/query';
+import { paymentStateForAmounts } from '../common/utils/claim-status';
 import { CreateSettlementDto, LedgerQueryDto, MarkSettlementDto, SettlementHistoryQueryDto } from './dto/finance.dto';
+
+function paidTimelineNote(
+  paymentMethod: string,
+  reference: string | null | undefined,
+  allocated: number,
+  claimAmount: number,
+  fullyPaid: boolean,
+): string {
+  const mode = paymentMethod?.trim() || 'wallet';
+  const ref = reference?.trim();
+  const via = ref ? `via ${mode} (Ref: ${ref})` : `via ${mode}`;
+  if (fullyPaid) return `Paid ${allocated} ${via}`;
+  return `Partially paid ${allocated} of ${claimAmount} ${via}`;
+}
 
 @Injectable()
 export class AdminFinanceService {
@@ -30,12 +45,20 @@ export class AdminFinanceService {
   async createSettlement(dto: CreateSettlementDto) {
     const employee = await this.prisma.user.findUnique({ where: { id: dto.employeeId }, include: { wallet: true } });
     if (!employee) throw new NotFoundException('Employee not found');
+    if (dto.amount <= 0) throw new BadRequestException('Settlement amount must be greater than 0');
     if (dto.amount > toNumber(employee.wallet?.balance))
       throw new BadRequestException('Settlement amount exceeds wallet due');
+
+    // Oldest approved claims that still have unpaid balance (supports partials)
     const claims = await this.prisma.expenseClaim.findMany({
-      where: { userId: dto.employeeId, approvalStatus: 'approved', paymentStatus: 'pending' },
-      orderBy: { approvedAt: 'asc' },
+      where: {
+        userId: dto.employeeId,
+        approvalStatus: 'approved',
+        paymentStatus: { in: ['pending', 'partially_paid'] },
+      },
+      orderBy: [{ approvedAt: 'asc' }, { id: 'asc' }],
     });
+
     const result = await this.prisma.$transaction(async (tx) => {
       const created = await tx.walletSettlement.create({
         data: {
@@ -60,20 +83,58 @@ export class AdminFinanceService {
           note: `Settlement ${code}`,
         },
       });
+
       let remaining = dto.amount;
+      const allocations: Array<{ claimId: string; allocated: number; status: string }> = [];
+
       for (const claim of claims) {
-        if (remaining <= 0) break;
+        if (remaining <= 0.001) break;
         const claimAmount = toNumber(claim.amount);
-        if (claimAmount <= remaining + 0.001) {
-          await tx.expenseClaim.update({
-            where: { id: claim.id },
-            data: { paymentStatus: 'paid', status: 'paid', settlementId: created.id },
-          });
-          remaining = Number((remaining - claimAmount).toFixed(2));
-        }
+        const alreadyPaid = toNumber(claim.paidAmount);
+        const due = Number((claimAmount - alreadyPaid).toFixed(2));
+        if (due <= 0.001) continue;
+
+        const allocated = Number(Math.min(due, remaining).toFixed(2));
+        const nextPaid = Number((alreadyPaid + allocated).toFixed(2));
+        const state = paymentStateForAmounts(claimAmount, nextPaid);
+
+        await tx.expenseClaim.update({
+          where: { id: claim.id },
+          data: {
+            paidAmount: state.paidAmount,
+            paymentStatus: state.paymentStatus,
+            status: state.status,
+            // Keep latest settlement pointer for audit; partials may span multiple settlements
+            settlementId: created.id,
+          },
+        });
+        await tx.claimEvent.create({
+          data: {
+            claimId: claim.id,
+            status: state.status,
+            note: paidTimelineNote(
+              dto.paymentMethod,
+              dto.reference,
+              allocated,
+              claimAmount,
+              state.paymentStatus === 'paid',
+            ),
+          },
+        });
+
+        allocations.push({ claimId: claim.code, allocated, status: state.status });
+        remaining = Number((remaining - allocated).toFixed(2));
       }
-      return { ...created, code };
+
+      if (remaining > 0.001) {
+        throw new BadRequestException(
+          `Settlement amount could not be fully allocated to open claims (unallocated ${remaining})`,
+        );
+      }
+
+      return { ...created, code, allocations };
     });
+
     return {
       settlementId: result.code,
       employeeId: dto.employeeId,
@@ -81,6 +142,7 @@ export class AdminFinanceService {
       paymentMethod: dto.paymentMethod,
       reference: dto.reference,
       status: 'paid',
+      allocations: result.allocations,
     };
   }
 
@@ -153,11 +215,21 @@ export class AdminFinanceService {
     });
     if (claims.length !== dto.claimIds.length)
       throw new BadRequestException('One or more claims were not found for this employee');
-    if (claims.some((claim) => claim.approvalStatus !== 'approved' || claim.paymentStatus === 'paid'))
-      throw new BadRequestException('All claims must be approved and unpaid');
-    const total = Number(claims.reduce((sum, claim) => sum + toNumber(claim.amount), 0).toFixed(2));
-    if (Math.abs(total - dto.paidAmount) > 0.01)
-      throw new BadRequestException('paidAmount must match the selected claim total');
+    if (claims.some((claim) => claim.approvalStatus !== 'approved'))
+      throw new BadRequestException('All claims must be approved');
+    if (claims.some((claim) => claim.paymentStatus === 'paid'))
+      throw new BadRequestException('One or more claims are already fully paid');
+
+    // Remaining due across selected claims (supports already partially paid rows)
+    const dueTotal = Number(
+      claims
+        .reduce((sum, claim) => sum + Math.max(0, toNumber(claim.amount) - toNumber(claim.paidAmount)), 0)
+        .toFixed(2),
+    );
+    if (dto.paidAmount <= 0) throw new BadRequestException('paidAmount must be greater than 0');
+    if (dto.paidAmount > dueTotal + 0.01)
+      throw new BadRequestException('paidAmount exceeds remaining due on selected claims');
+
     const settlement = await this.prisma.$transaction(async (tx) => {
       const created = await tx.walletSettlement.create({
         data: {
@@ -172,10 +244,43 @@ export class AdminFinanceService {
       });
       const code = publicCode('SET', created.id);
       await tx.walletSettlement.update({ where: { id: created.id }, data: { code } });
-      await tx.expenseClaim.updateMany({
-        where: { id: { in: claims.map((claim) => claim.id) } },
-        data: { paymentStatus: 'paid', status: 'paid', settlementId: created.id },
-      });
+
+      let remaining = dto.paidAmount;
+      const allocations: Array<{ claimId: string; allocated: number; status: string }> = [];
+      for (const claim of claims) {
+        if (remaining <= 0.001) break;
+        const claimAmount = toNumber(claim.amount);
+        const alreadyPaid = toNumber(claim.paidAmount);
+        const due = Number((claimAmount - alreadyPaid).toFixed(2));
+        if (due <= 0.001) continue;
+        const allocated = Number(Math.min(due, remaining).toFixed(2));
+        const state = paymentStateForAmounts(claimAmount, alreadyPaid + allocated);
+        await tx.expenseClaim.update({
+          where: { id: claim.id },
+          data: {
+            paidAmount: state.paidAmount,
+            paymentStatus: state.paymentStatus,
+            status: state.status,
+            settlementId: created.id,
+          },
+        });
+        await tx.claimEvent.create({
+          data: {
+            claimId: claim.id,
+            status: state.status,
+            note: paidTimelineNote(
+              dto.paymentMethod,
+              dto.reference,
+              allocated,
+              claimAmount,
+              state.paymentStatus === 'paid',
+            ),
+          },
+        });
+        allocations.push({ claimId: claim.code, allocated, status: state.status });
+        remaining = Number((remaining - allocated).toFixed(2));
+      }
+
       await tx.wallet.upsert({
         where: { userId: employeeId },
         update: { balance: { decrement: dto.paidAmount } },
@@ -190,7 +295,7 @@ export class AdminFinanceService {
           note: `Settlement ${code}`,
         },
       });
-      return { code, amount: dto.paidAmount };
+      return { code, amount: dto.paidAmount, allocations };
     });
     return {
       settlementId: settlement.code,
@@ -200,6 +305,7 @@ export class AdminFinanceService {
       reference: dto.reference,
       status: 'paid',
       paidAt,
+      allocations: settlement.allocations,
     };
   }
 }

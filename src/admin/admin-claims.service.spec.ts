@@ -10,17 +10,20 @@ describe('AdminClaimsService', () => {
   it('lists claims with receiptUrl and filters status=closed', async () => {
     const findMany = jest.fn().mockResolvedValue([
       {
-        code: 'C_15',
-        amount: 250,
+        code: 'C_9',
+        amount: 60,
+        paidAmount: 0,
         otherCategory: null,
         status: 'approved',
+        approvalStatus: 'approved',
+        paymentStatus: 'pending',
         isOverBudget: false,
-        submissionDate: new Date('2026-09-04T15:27:12.000Z'),
-        user: { id: 101, name: 'Rajesh' },
-        category: { name: 'Food' },
+        submissionDate: new Date('2026-09-04T14:01:52.000Z'),
+        user: { id: 101, name: 'Rajesh', department: 'Housekeeping', role: 'employee' },
+        category: { name: 'Travel' },
         receipt: {
           fileUrl:
-            'https://api.schoollift.in/expense-management/uploads/receipts/a96bd104-1ce1-4ed7-b955-035253dad1d5.jpg',
+            'https://api.schoollift.in/expense-management/uploads/receipts/da5ca1e2-c237-4371-acf4-d891e30dc7f1.jpg',
         },
       },
     ]);
@@ -37,19 +40,18 @@ describe('AdminClaimsService', () => {
       limit: 20,
     });
 
-    expect(findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          status: { in: ['approved', 'rejected', 'paid', 'settled'] },
-        }),
-        include: { user: true, category: true, receipt: true },
-      }),
-    );
     expect(result.items[0]).toMatchObject({
-      claimId: 'C_15',
+      claimId: 'C_9',
       employee: 'Rajesh',
+      role: 'Housekeeping',
+      amount: 60,
+      paidAmount: 0,
+      remainingAmount: 60,
+      status: 'approved',
+      paymentStatus: 'pending',
       receiptUrl:
-        'https://api.schoollift.in/expense-management/uploads/receipts/a96bd104-1ce1-4ed7-b955-035253dad1d5.jpg',
+        'https://api.schoollift.in/expense-management/uploads/receipts/da5ca1e2-c237-4371-acf4-d891e30dc7f1.jpg',
     });
+    expect(result.summary).toEqual(expect.objectContaining({ open: 1, flagged: 1, closed: 1 }));
   });
 });

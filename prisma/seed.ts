@@ -5,7 +5,7 @@ const prisma = new PrismaClient();
 async function main() {
   await prisma.user.upsert({
     where: { phone: '9876543210' },
-    update: { name: 'Rajesh' },
+    update: {},
     create: {
       id: 101,
       name: 'Rajesh',
@@ -17,7 +17,7 @@ async function main() {
   });
   await prisma.wallet.upsert({
     where: { userId: 101 },
-    update: { balance: new Prisma.Decimal(2500) },
+    update: {},
     create: { userId: 101, balance: new Prisma.Decimal(2500) },
   });
 
@@ -64,11 +64,26 @@ async function main() {
       create: { settingKey, settingValue },
     });
   }
+  // Additive only: never overwrite existing role_caps / users.
   await prisma.roleCap.upsert({
     where: { role: 'Housekeeping' },
-    update: { monthlyCap: new Prisma.Decimal(15000) },
+    update: {},
     create: { role: 'Housekeeping', monthlyCap: new Prisma.Decimal(15000) },
   });
+  for (const row of [
+    { role: 'Driver', description: 'Vehicle operators', monthlyCap: 9000 },
+    { role: 'Office Admin', description: 'Office administration', monthlyCap: 9000 },
+  ]) {
+    await prisma.roleCap.upsert({
+      where: { role: row.role },
+      update: {},
+      create: {
+        role: row.role,
+        description: row.description,
+        monthlyCap: new Prisma.Decimal(row.monthlyCap),
+      },
+    });
+  }
 }
 
 main().finally(() => prisma.$disconnect());

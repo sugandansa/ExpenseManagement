@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -6,11 +6,13 @@ import { ADMIN_ROLES } from './admin.constants';
 import { AdminCatalogService } from './admin-catalog.service';
 import {
   CreateCategoryDto,
+  CreateRoleDto,
   CreateSubcategoryDto,
   UpdateCategoryCapDto,
   UpdateCategoryDto,
   UpdateCategoryStatusDto,
   UpdateRoleCapDto,
+  UpdateRoleDto,
   UpdateSubcategoryDto,
 } from './dto/catalog.dto';
 
@@ -47,10 +49,53 @@ export class AdminCategoriesController {
   updateStatus(@Param('categoryId', ParseIntPipe) categoryId: number, @Body() dto: UpdateCategoryStatusDto) {
     return this.catalog.updateStatus(categoryId, dto);
   }
+  @Put(':categoryId')
+  @ApiOperation({ summary: 'Edit category name, monthly cap, and subcategory items' })
+  replace(@Param('categoryId', ParseIntPipe) categoryId: number, @Body() dto: UpdateCategoryDto) {
+    return this.catalog.updateCategory(categoryId, dto);
+  }
   @Patch(':categoryId')
-  @ApiOperation({ summary: 'Update category name and/or cap' })
+  @ApiOperation({ summary: 'Update category name and/or cap (and optional items)' })
   update(@Param('categoryId', ParseIntPipe) categoryId: number, @Body() dto: UpdateCategoryDto) {
     return this.catalog.updateCategory(categoryId, dto);
+  }
+  @Delete(':categoryId')
+  @ApiOperation({ summary: 'Delete a category (blocked if any claims are mapped)' })
+  remove(@Param('categoryId', ParseIntPipe) categoryId: number) {
+    return this.catalog.deleteCategory(categoryId);
+  }
+}
+
+@ApiTags('admin-roles')
+@ApiBearerAuth()
+@Roles(...ADMIN_ROLES)
+@UseGuards(RolesGuard)
+@Controller('admin/roles')
+export class AdminRolesController {
+  constructor(private readonly catalog: AdminCatalogService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'List job roles (role caps) with user counts' })
+  list() {
+    return this.catalog.listRoles();
+  }
+
+  @Post()
+  @ApiOperation({ summary: 'Create a job role with monthly spending cap' })
+  create(@Body() dto: CreateRoleDto) {
+    return this.catalog.createRole(dto);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update a job role (does not rewrite existing user departments)' })
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateRoleDto) {
+    return this.catalog.updateRole(id, dto);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Delete a job role (blocked if assigned to users)' })
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.catalog.deleteRole(id);
   }
 }
 

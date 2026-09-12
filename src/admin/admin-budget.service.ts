@@ -35,40 +35,39 @@ export class AdminBudgetService {
     const month = `${claim.submissionDate.getUTCFullYear()}-${String(claim.submissionDate.getUTCMonth() + 1).padStart(2, '0')}`;
     const range = monthRange(month)!;
     const amount = toNumber(claim.amount);
-    const [categorySpend, userSpend, roleCap] = await Promise.all([
-      claim.categoryId != null
-        ? this.prisma.expenseClaim.aggregate({
-            where: {
-              categoryId: claim.categoryId,
-              id: { not: claim.id },
-              status: { not: 'rejected' },
-              submissionDate: { gte: range.start, lt: range.end },
-            },
-            _sum: { amount: true },
-          })
-        : Promise.resolve({ _sum: { amount: null } }),
-      this.prisma.expenseClaim.aggregate({
+
+    // Catalog categories: flag against the employee's per-category monthly cap (same as categories API).
+    if (claim.categoryId != null) {
+      const categorySpend = await this.prisma.expenseClaim.aggregate({
         where: {
           userId: claim.userId,
+          categoryId: claim.categoryId,
           id: { not: claim.id },
           status: { not: 'rejected' },
           submissionDate: { gte: range.start, lt: range.end },
         },
         _sum: { amount: true },
-      }),
-      claim.user.department
-        ? this.prisma.roleCap.findUnique({ where: { role: claim.user.department } })
-        : Promise.resolve(null),
-    ]);
-    const categoryCap = claim.category ? toNumber(claim.category.monthlyCap) : 0;
-    const categoryProjected = toNumber(categorySpend._sum.amount) + amount;
+      });
+      const categoryCap = claim.category ? toNumber(claim.category.monthlyCap) : 0;
+      const categoryProjected = toNumber(categorySpend._sum.amount) + amount;
+      const overCategory =
+        categoryCap > 0 && categoryProjected > categoryCap ? Number((categoryProjected - categoryCap).toFixed(2)) : 0;
+      return { flagged: overCategory > 0, overAmount: overCategory };
+    }
+
+    // Free-text "Other": fall back to the employee's personal monthly budget.
+    const userSpend = await this.prisma.expenseClaim.aggregate({
+      where: {
+        userId: claim.userId,
+        id: { not: claim.id },
+        status: { not: 'rejected' },
+        submissionDate: { gte: range.start, lt: range.end },
+      },
+      _sum: { amount: true },
+    });
     const userBudget = toNumber(claim.user.monthlyBudget);
     const userProjected = toNumber(userSpend._sum.amount) + amount;
-    const roleLimit = roleCap?.isActive ? toNumber(roleCap.monthlyCap) : 0;
-    const overCategory = categoryCap > 0 && categoryProjected > categoryCap ? categoryProjected - categoryCap : 0;
-    const overUser = userBudget > 0 && userProjected > userBudget ? userProjected - userBudget : 0;
-    const overRole = roleLimit > 0 && userProjected > roleLimit ? userProjected - roleLimit : 0;
-    const overAmount = Number(Math.max(overCategory, overUser, overRole).toFixed(2));
-    return { flagged: overAmount > 0, overAmount };
+    const overUser = userBudget > 0 && userProjected > userBudget ? Number((userProjected - userBudget).toFixed(2)) : 0;
+    return { flagged: overUser > 0, overAmount: overUser };
   }
 }

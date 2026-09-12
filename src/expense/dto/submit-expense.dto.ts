@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import { IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, ValidateIf } from 'class-validator';
 
 export class SubmitExpenseDto {
@@ -6,7 +7,14 @@ export class SubmitExpenseDto {
   @ApiProperty({ example: 1400 }) @IsNumber() @Min(1) amount!: number;
   /** Use `0` for the free-text "Other" category (requires `otherCategory`). */
   @ApiProperty({ example: 2, description: 'Category id, or 0 for Other' }) @IsInt() @Min(0) categoryId!: number;
-  @ApiPropertyOptional({ example: 5, description: 'Optional sub-category for catalog categories' })
+  @ApiPropertyOptional({
+    example: 5,
+    description: 'Optional subcategory id. Omit for category-only claims.',
+  })
+  @Transform(({ value }) => {
+    if (value === '' || value === null || value === undefined || value === 0 || value === '0') return undefined;
+    return typeof value === 'string' ? Number(value) : value;
+  })
   @IsOptional()
   @IsInt()
   @Min(1)

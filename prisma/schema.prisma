@@ -10,8 +10,11 @@ datasource db {
 model User {
   id             Int      @id @default(autoincrement())
   name           String   @db.VarChar(120)
+  email          String?  @db.VarChar(160)
   phone          String   @unique @db.VarChar(15)
   role           String   @default("employee") @db.VarChar(32)
+  /** Job role FK (role_caps). Nullable so existing rows stay unchanged. */
+  roleCapId      Int?     @map("role_cap_id")
   department     String?  @db.VarChar(120)
   monthlyBudget  Decimal? @map("monthly_budget") @db.Decimal(12, 2)
   passwordHash   String?  @map("password_hash") @db.VarChar(120)
@@ -19,6 +22,7 @@ model User {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
+  roleCap        RoleCap? @relation(fields: [roleCapId], references: [id])
   otpRequests    OtpRequest[]
   sessions       AuthSession[]
   receipts       Receipt[]
@@ -28,6 +32,7 @@ model User {
   settlements    WalletSettlement[]
   ledgerEntries  WalletLedger[]
 
+  @@index([roleCapId])
   @@map("users")
 }
 
@@ -130,6 +135,8 @@ model ExpenseClaim {
   rejectionReason  String?   @map("rejection_reason") @db.VarChar(500)
   isOverBudget     Boolean   @default(false) @map("is_over_budget")
   overBudgetAmount Decimal   @default(0) @map("over_budget_amount") @db.Decimal(12, 2)
+  /** Amount already settled/paid out against this claim (supports partial payments). */
+  paidAmount       Decimal   @default(0) @map("paid_amount") @db.Decimal(12, 2)
   approvedAt       DateTime? @map("approved_at")
   approvalComment  String?   @map("approval_comment") @db.VarChar(500)
   settlementId     Int?      @map("settlement_id")
@@ -196,12 +203,15 @@ model WalletSettlement {
 }
 
 model RoleCap {
-  id         Int      @id @default(autoincrement())
-  role       String   @unique @db.VarChar(80)
-  monthlyCap Decimal  @map("monthly_cap") @db.Decimal(12, 2)
-  isActive   Boolean  @default(true) @map("is_active")
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  id          Int      @id @default(autoincrement())
+  role        String   @unique @db.VarChar(80)
+  description String?  @db.VarChar(255)
+  monthlyCap  Decimal  @map("monthly_cap") @db.Decimal(12, 2)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  users User[]
 
   @@map("role_caps")
 }
