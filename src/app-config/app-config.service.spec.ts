@@ -25,4 +25,39 @@ describe('AppConfigService', () => {
       },
     });
   });
+
+  it('upserts all update settings then returns the latest config', async () => {
+    const prisma = {
+      appSetting: {
+        upsert: jest.fn().mockResolvedValue({}),
+        findMany: jest.fn().mockResolvedValue([
+          { settingKey: 'force_update_android', settingValue: '2' },
+          { settingKey: 'app_update_android', settingValue: '3' },
+          { settingKey: 'force_update_ios', settingValue: '1.1.0' },
+          { settingKey: 'app_update_ios', settingValue: '1.2.0' },
+        ]),
+      },
+      $transaction: jest.fn().mockResolvedValue([]),
+    } as unknown as PrismaService;
+
+    const service = new AppConfigService(prisma);
+    await expect(
+      service.update({
+        force_update_android: 2,
+        app_update_android: 3,
+        force_update_ios: '1.1.0',
+        app_update_ios: '1.2.0',
+      }),
+    ).resolves.toEqual({
+      status: 200,
+      data: {
+        force_update_android: 2,
+        app_update_android: 3,
+        force_update_ios: '1.1.0',
+        app_update_ios: '1.2.0',
+      },
+    });
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(prisma.appSetting.upsert).toHaveBeenCalledTimes(4);
+  });
 });

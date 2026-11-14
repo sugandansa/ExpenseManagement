@@ -10,6 +10,8 @@ import { AdminFinanceService } from './admin-finance.service';
 import { AdminSettlementsController, AdminWalletsController } from './admin-finance.controller';
 import { AdminUsersController } from './admin-users.controller';
 import { AdminUsersService } from './admin-users.service';
+import { AdminPushController } from './admin-push.controller';
+import { AdminReportsController } from './admin-reports.controller';
 
 @Module({
   controllers: [
@@ -21,6 +23,8 @@ import { AdminUsersService } from './admin-users.service';
     AdminUsersController,
     AdminSettlementsController,
     AdminWalletsController,
+    AdminPushController,
+    AdminReportsController,
   ],
   providers: [
     AdminBudgetService,

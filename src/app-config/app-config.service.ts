@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { UpdateAppUpdateDto } from './dto/update-app-update.dto';
 
 const SEMVER = /^\d+\.\d+\.\d+$/;
+const UPDATE_KEYS = ['force_update_android', 'app_update_android', 'force_update_ios', 'app_update_ios'] as const;
 
 function asAndroidCode(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -33,5 +35,26 @@ export class AppConfigService {
         app_update_ios: asIosVersion(map.app_update_ios, iosFallback),
       },
     };
+  }
+
+  async update(dto: UpdateAppUpdateDto) {
+    const values: Record<(typeof UPDATE_KEYS)[number], string> = {
+      force_update_android: String(dto.force_update_android),
+      app_update_android: String(dto.app_update_android),
+      force_update_ios: dto.force_update_ios,
+      app_update_ios: dto.app_update_ios,
+    };
+
+    await this.prisma.$transaction(
+      UPDATE_KEYS.map((settingKey) =>
+        this.prisma.appSetting.upsert({
+          where: { settingKey },
+          update: { settingValue: values[settingKey] },
+          create: { settingKey, settingValue: values[settingKey] },
+        }),
+      ),
+    );
+
+    return this.get();
   }
 }

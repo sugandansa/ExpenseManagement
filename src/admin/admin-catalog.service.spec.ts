@@ -104,6 +104,63 @@ describe('AdminCatalogService', () => {
     ]);
   });
 
+  it('lists role caps with users and current-month spent amounts', async () => {
+    const prisma = {
+      roleCap: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 2,
+            role: 'House Keeping',
+            description: 'housekeeping',
+            monthlyCap: 8000,
+            isActive: true,
+          },
+          {
+            id: 6,
+            role: 'Manager',
+            description: 'Test',
+            monthlyCap: 5000,
+            isActive: true,
+          },
+        ]),
+      },
+      user: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 10, name: 'Rajesh', roleCapId: 2, department: 'House Keeping' },
+          { id: 11, name: 'raja', roleCapId: null, department: 'House Keeping' },
+          { id: 12, name: 'Anita', roleCapId: 6, department: 'Manager' },
+        ]),
+      },
+      expenseClaim: {
+        groupBy: jest.fn().mockResolvedValue([
+          { userId: 10, _sum: { amount: 2000 } },
+          { userId: 11, _sum: { amount: 5000 } },
+        ]),
+      },
+    } as unknown as PrismaService;
+    const service = new AdminCatalogService(prisma, {} as AdminBudgetService);
+    await expect(service.roleCaps()).resolves.toEqual([
+      {
+        id: 2,
+        role: 'House Keeping',
+        description: 'housekeeping',
+        monthlyCap: 8000,
+        isActive: true,
+        user: ['Rajesh', 'raja'],
+        spentamount: [2000, 5000],
+      },
+      {
+        id: 6,
+        role: 'Manager',
+        description: 'Test',
+        monthlyCap: 5000,
+        isActive: true,
+        user: ['Anita'],
+        spentamount: [0],
+      },
+    ]);
+  });
+
   it('blocks deleteRole when users are assigned', async () => {
     const prisma = {
       roleCap: {

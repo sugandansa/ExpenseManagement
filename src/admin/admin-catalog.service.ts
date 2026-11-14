@@ -176,14 +176,58 @@ export class AdminCatalogService {
   }
 
   async roleCaps() {
+    const range = monthRange(currentMonth())!;
     const rows = await this.prisma.roleCap.findMany({ orderBy: { role: 'asc' } });
-    return rows.map((row) => ({
-      id: row.id,
-      role: row.role,
-      description: row.description,
-      monthlyCap: toNumber(row.monthlyCap),
-      isActive: row.isActive,
-    }));
+    if (rows.length === 0) return [];
+
+    const roleIds = rows.map((row) => row.id);
+    const roleNames = rows.map((row) => row.role);
+    const users = await this.prisma.user.findMany({
+      where: {
+        role: 'employee',
+        OR: [{ roleCapId: { in: roleIds } }, { roleCapId: null, department: { in: roleNames } }],
+      },
+      select: { id: true, name: true, roleCapId: true, department: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const spends =
+      users.length === 0
+        ? []
+        : await this.prisma.expenseClaim.groupBy({
+            by: ['userId'],
+            where: {
+              status: { not: 'rejected' },
+              submissionDate: { gte: range.start, lt: range.end },
+              userId: { in: users.map((user) => user.id) },
+            },
+            _sum: { amount: true },
+          });
+    const spendByUser = new Map(spends.map((row) => [row.userId, toNumber(row._sum.amount)]));
+
+    const usersByRoleId = new Map<number, typeof users>();
+    for (const row of rows) usersByRoleId.set(row.id, []);
+    for (const user of users) {
+      const matched =
+        user.roleCapId != null
+          ? rows.find((row) => row.id === user.roleCapId)
+          : rows.find((row) => row.role === user.department);
+      if (!matched) continue;
+      usersByRoleId.get(matched.id)!.push(user);
+    }
+
+    return rows.map((row) => {
+      const roleUsers = usersByRoleId.get(row.id) ?? [];
+      return {
+        id: row.id,
+        role: row.role,
+        description: row.description,
+        monthlyCap: toNumber(row.monthlyCap),
+        isActive: row.isActive,
+        user: roleUsers.map((user) => user.name),
+        spentamount: roleUsers.map((user) => spendByUser.get(user.id) ?? 0),
+      };
+    });
   }
 
   async updateRoleCap(role: string, dto: UpdateRoleCapDto) {

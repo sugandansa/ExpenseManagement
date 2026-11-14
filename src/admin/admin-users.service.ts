@@ -137,6 +137,33 @@ export class AdminUsersService {
     return this.mapUser(user, roleByUserId.get(user.id));
   }
 
+  async changeAccess(id: number, actorId: number, reason: string, active: boolean) {
+    await this.requireEmployee(id);
+    const event = await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id }, data: { isActive: active } });
+      if (!active) {
+        await tx.authSession.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
+        await tx.otpRequest.updateMany({ where: { userId: id, consumedAt: null }, data: { consumedAt: new Date() } });
+        await tx.passwordReset.updateMany({
+          where: { userId: id, consumedAt: null },
+          data: { consumedAt: new Date() },
+        });
+      }
+      return tx.accessEvent.create({ data: { userId: id, actorId, reason, action: active ? 'restored' : 'revoked' } });
+    });
+    return active
+      ? {
+          success: true,
+          message: 'User access restored successfully',
+          data: { userId: id, status: 'ACTIVE', restoredAt: event.createdAt, restoredBy: actorId },
+        }
+      : {
+          success: true,
+          message: 'User access revoked successfully',
+          data: { userId: id, status: 'REVOKED', reason, revokedAt: event.createdAt, revokedBy: actorId },
+        };
+  }
+
   async remove(id: number) {
     const user = await this.requireEmployee(id);
     const claimCount = await this.prisma.expenseClaim.count({ where: { userId: id } });
@@ -146,6 +173,8 @@ export class AdminUsersService {
 
     await this.prisma.$transaction(async (tx) => {
       await tx.authSession.deleteMany({ where: { userId: id } });
+      await tx.passwordReset.deleteMany({ where: { userId: id } });
+      await tx.pushSubscription.deleteMany({ where: { userId: id } });
       await tx.otpRequest.deleteMany({ where: { userId: id } });
       await tx.walletLedger.deleteMany({ where: { userId: id } });
       await tx.walletSettlement.deleteMany({ where: { userId: id } });

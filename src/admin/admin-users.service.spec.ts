@@ -58,6 +58,28 @@ describe('AdminUsersService', () => {
     expect(normalizeRoleKey('Housekeeping')).toBe('housekeeping');
   });
 
+  it('audits a revocation and invalidates outstanding credentials', async () => {
+    const { service, prisma } = build();
+    prisma.user.findFirst.mockResolvedValue(user);
+    const tx = {
+      user: { update: jest.fn() },
+      authSession: { updateMany: jest.fn() },
+      otpRequest: { updateMany: jest.fn() },
+      passwordReset: { updateMany: jest.fn() },
+      accessEvent: { create: jest.fn().mockResolvedValue({ createdAt: user.createdAt }) },
+    };
+    prisma.$transaction.mockImplementation(async (fn: (value: typeof tx) => unknown) => fn(tx));
+    await expect(service.changeAccess(101, 2, 'Review', false)).resolves.toMatchObject({
+      data: { userId: 101, status: 'REVOKED', revokedBy: 2 },
+    });
+    expect(tx.authSession.updateMany).toHaveBeenCalled();
+    expect(tx.otpRequest.updateMany).toHaveBeenCalled();
+    expect(tx.passwordReset.updateMany).toHaveBeenCalled();
+    expect(tx.accessEvent.create).toHaveBeenCalledWith({
+      data: { userId: 101, actorId: 2, reason: 'Review', action: 'revoked' },
+    });
+  });
+
   it('lists users resolving role by normalized department and heals roleCapId', async () => {
     const { service, prisma } = build();
     prisma.$transaction.mockResolvedValue([1, [{ ...user }]]);

@@ -106,7 +106,9 @@ export class AdminRolesController {
 @Controller('admin/role-caps')
 export class AdminRoleCapsController {
   constructor(private readonly catalog: AdminCatalogService) {}
-  @Get() @ApiOperation({ summary: 'List role spending caps' }) list() {
+  @Get()
+  @ApiOperation({ summary: 'List role spending caps with users and current-month spend' })
+  list() {
     return this.catalog.roleCaps();
   }
   @Patch(':role')

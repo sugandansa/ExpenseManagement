@@ -5,6 +5,9 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { ADMIN_ROLES } from './admin.constants';
 import { AdminUsersService } from './admin-users.service';
 import { AdminUsersQueryDto, CreateUserDto, UpdateUserDto, UpdateUserStatusDto } from './dto/users.dto';
+import { AccessReasonDto } from './dto/users.dto';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { AuthUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('admin-users')
 @ApiBearerAuth()
@@ -42,6 +45,16 @@ export class AdminUsersController {
   @ApiOperation({ summary: 'Change employee user active status' })
   updateStatus(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateUserStatusDto) {
     return this.users.updateStatus(id, dto);
+  }
+
+  @Post(':id/revoke-access')
+  revokeAccess(@Param('id', ParseIntPipe) id: number, @Body() dto: AccessReasonDto, @CurrentUser() actor: AuthUser) {
+    return this.users.changeAccess(id, actor.id, dto.reason, false);
+  }
+
+  @Post(':id/restore-access')
+  restoreAccess(@Param('id', ParseIntPipe) id: number, @Body() dto: AccessReasonDto, @CurrentUser() actor: AuthUser) {
+    return this.users.changeAccess(id, actor.id, dto.reason, true);
   }
 
   @Delete(':id')

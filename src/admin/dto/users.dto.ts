@@ -75,3 +75,11 @@ export class UpdateUserStatusDto {
   @IsIn(USER_STATUSES)
   status!: (typeof USER_STATUSES)[number];
 }
+
+export class AccessReasonDto {
+  @ApiProperty({ example: 'Access changed after review' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  reason!: string;
+}

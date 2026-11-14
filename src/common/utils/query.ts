@@ -2,7 +2,7 @@ export function monthRange(month?: string): { start: Date; end: Date } | null {
   if (!month) {
     return null;
   }
-  if (!/^\d{4}-\d{2}$/.test(month)) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
     throw new Error('INVALID_MONTH');
   }
   const start = new Date(`${month}-01T00:00:00.000Z`);

@@ -49,17 +49,20 @@ export class AdminFinanceService {
     if (dto.amount > toNumber(employee.wallet?.balance))
       throw new BadRequestException('Settlement amount exceeds wallet due');
 
-    // Oldest approved claims that still have unpaid balance (supports partials)
-    const claims = await this.prisma.expenseClaim.findMany({
-      where: {
-        userId: dto.employeeId,
-        approvalStatus: 'approved',
-        paymentStatus: { in: ['pending', 'partially_paid'] },
-      },
-      orderBy: [{ approvedAt: 'asc' }, { id: 'asc' }],
-    });
-
     const result = await this.prisma.$transaction(async (tx) => {
+      const debited = await tx.wallet.updateMany({
+        where: { userId: dto.employeeId, balance: { gte: dto.amount } },
+        data: { balance: { decrement: dto.amount } },
+      });
+      if (!debited.count) throw new BadRequestException('Settlement amount exceeds wallet due');
+      const claims = await tx.expenseClaim.findMany({
+        where: {
+          userId: dto.employeeId,
+          approvalStatus: 'approved',
+          paymentStatus: { in: ['pending', 'partially_paid'] },
+        },
+        orderBy: [{ approvedAt: 'asc' }, { id: 'asc' }],
+      });
       const created = await tx.walletSettlement.create({
         data: {
           code: 'pending',
@@ -67,13 +70,13 @@ export class AdminFinanceService {
           amount: new Prisma.Decimal(dto.amount),
           paymentMode: dto.paymentMethod,
           reference: dto.reference,
+          notes: dto.notes,
           status: 'paid',
           settledAt: new Date(),
         },
       });
       const code = publicCode('SET', created.id);
       await tx.walletSettlement.update({ where: { id: created.id }, data: { code } });
-      await tx.wallet.update({ where: { userId: dto.employeeId }, data: { balance: { decrement: dto.amount } } });
       await tx.walletLedger.create({
         data: {
           userId: dto.employeeId,
@@ -136,6 +139,18 @@ export class AdminFinanceService {
     });
 
     return {
+      success: true,
+      message: 'Settlement created successfully',
+      data: {
+        id: result.code,
+        employeeId: dto.employeeId,
+        amount: dto.amount,
+        paymentMethod: dto.paymentMethod,
+        reference: dto.reference ?? null,
+        notes: dto.notes ?? null,
+        status: 'COMPLETED',
+        createdAt: result.createdAt,
+      },
       settlementId: result.code,
       employeeId: dto.employeeId,
       amount: dto.amount,
@@ -210,27 +225,27 @@ export class AdminFinanceService {
   async markPaid(employeeId: number, dto: MarkSettlementDto) {
     const paidAt = new Date(dto.paidAt);
     if (Number.isNaN(paidAt.getTime())) throw new BadRequestException('Invalid paidAt');
-    const claims = await this.prisma.expenseClaim.findMany({
-      where: { code: { in: dto.claimIds }, userId: employeeId },
-    });
-    if (claims.length !== dto.claimIds.length)
-      throw new BadRequestException('One or more claims were not found for this employee');
-    if (claims.some((claim) => claim.approvalStatus !== 'approved'))
-      throw new BadRequestException('All claims must be approved');
-    if (claims.some((claim) => claim.paymentStatus === 'paid'))
-      throw new BadRequestException('One or more claims are already fully paid');
-
-    // Remaining due across selected claims (supports already partially paid rows)
-    const dueTotal = Number(
-      claims
-        .reduce((sum, claim) => sum + Math.max(0, toNumber(claim.amount) - toNumber(claim.paidAmount)), 0)
-        .toFixed(2),
-    );
     if (dto.paidAmount <= 0) throw new BadRequestException('paidAmount must be greater than 0');
-    if (dto.paidAmount > dueTotal + 0.01)
-      throw new BadRequestException('paidAmount exceeds remaining due on selected claims');
-
     const settlement = await this.prisma.$transaction(async (tx) => {
+      const debited = await tx.wallet.updateMany({
+        where: { userId: employeeId, balance: { gte: dto.paidAmount } },
+        data: { balance: { decrement: dto.paidAmount } },
+      });
+      if (!debited.count) throw new BadRequestException('paidAmount exceeds wallet due');
+      const claims = await tx.expenseClaim.findMany({ where: { code: { in: dto.claimIds }, userId: employeeId } });
+      if (claims.length !== dto.claimIds.length)
+        throw new BadRequestException('One or more claims were not found for this employee');
+      if (claims.some((claim) => claim.approvalStatus !== 'approved'))
+        throw new BadRequestException('All claims must be approved');
+      if (claims.some((claim) => claim.paymentStatus === 'paid'))
+        throw new BadRequestException('One or more claims are already fully paid');
+      const dueTotal = Number(
+        claims
+          .reduce((sum, claim) => sum + Math.max(0, toNumber(claim.amount) - toNumber(claim.paidAmount)), 0)
+          .toFixed(2),
+      );
+      if (dto.paidAmount > dueTotal)
+        throw new BadRequestException('paidAmount exceeds remaining due on selected claims');
       const created = await tx.walletSettlement.create({
         data: {
           code: 'pending',
@@ -281,11 +296,6 @@ export class AdminFinanceService {
         remaining = Number((remaining - allocated).toFixed(2));
       }
 
-      await tx.wallet.upsert({
-        where: { userId: employeeId },
-        update: { balance: { decrement: dto.paidAmount } },
-        create: { userId: employeeId, balance: 0 },
-      });
       await tx.walletLedger.create({
         data: {
           userId: employeeId,
