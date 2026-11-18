@@ -4,7 +4,7 @@ import { IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, Mi
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { IntQuery } from '../../common/dto/int-query';
 
-const USER_STATUSES = ['active', 'inactive'] as const;
+const USER_STATUSES = ['active', 'inactive', 'revoked'] as const;
 
 export class AdminUsersQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({ enum: USER_STATUSES })

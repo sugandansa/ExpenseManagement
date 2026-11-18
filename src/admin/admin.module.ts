@@ -12,6 +12,8 @@ import { AdminUsersController } from './admin-users.controller';
 import { AdminUsersService } from './admin-users.service';
 import { AdminPushController } from './admin-push.controller';
 import { AdminReportsController } from './admin-reports.controller';
+import { AdminAccountsController } from './admin-accounts.controller';
+import { AdminAccountsService } from './admin-accounts.service';
 
 @Module({
   controllers: [
@@ -21,6 +23,7 @@ import { AdminReportsController } from './admin-reports.controller';
     AdminRolesController,
     AdminRoleCapsController,
     AdminUsersController,
+    AdminAccountsController,
     AdminSettlementsController,
     AdminWalletsController,
     AdminPushController,
@@ -32,6 +35,7 @@ import { AdminReportsController } from './admin-reports.controller';
     AdminClaimsService,
     AdminCatalogService,
     AdminUsersService,
+    AdminAccountsService,
     AdminFinanceService,
   ],
 })

@@ -20,7 +20,7 @@ export class AdminUsersService {
     const where: Prisma.UserWhereInput = { role: 'employee' };
 
     if (query.status === 'active') where.isActive = true;
-    if (query.status === 'inactive') where.isActive = false;
+    if (query.status === 'inactive' || query.status === 'revoked') where.isActive = false;
 
     if (query.search?.trim()) {
       const q = query.search.trim();

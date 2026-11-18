@@ -109,6 +109,21 @@ describe('AdminUsersService', () => {
     });
   });
 
+  it('accepts revoked as an alias for inactive users in the list filter', async () => {
+    const { service, prisma } = build();
+    prisma.user.count.mockResolvedValue(0);
+    prisma.user.findMany.mockResolvedValue([]);
+    prisma.$transaction.mockResolvedValue([0, []]);
+    prisma.roleCap.findMany.mockResolvedValue([]);
+
+    await service.list({ page: 1, limit: 20, status: 'revoked' });
+
+    expect(prisma.user.count).toHaveBeenCalledWith({ where: { role: 'employee', isActive: false } });
+    expect(prisma.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { role: 'employee', isActive: false } }),
+    );
+  });
+
   it('returns role null when department has no matching role', async () => {
     const { service, prisma } = build();
     const orphan = { ...user, id: 105, name: 'Test user', department: 'Admin', email: 'test@gmail.com' };

@@ -37,6 +37,21 @@ Pre-commit (Husky): runs `lint-staged` (ESLint + Prettier on staged files) then 
 
 Employee OTP login uses phone `9876543210`. Owner password login uses phone `9000000001` (set password hash in seed/admin SQL).
 
+An authenticated owner can create additional admin or owner accounts with `POST /api/admin/accounts`. The
+new account has no initial password; the new user must use the password-reset OTP flow to set one. The first
+owner must be provisioned through the trusted deployment bootstrap process. Admin and owner account
+creation is not available to admins or unauthenticated callers. Send an owner access token and a body such as:
+
+```json
+{
+  "name": "Admin Name",
+  "phone": "1234567890",
+  "role": "admin"
+}
+```
+
+`role` accepts `admin` or `owner`; `email` and `department` are optional.
+
 ## OTP / SMS
 
 Real numbers get a random six-digit code via MSG91 Flow (`MSG91_*` env vars, same DLT template as
